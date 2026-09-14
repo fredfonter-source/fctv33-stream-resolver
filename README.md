@@ -1,28 +1,37 @@
 # FCTV33 Stream Resolver
 
-**Self-hosted HLS stream resolver and m3u8 proxy.** Paste a live sports match page URL, resolve it to a tokenized CDN playlist through a local REST API, and copy a direct proxied stream link for VLC, Stremio, mpv, or any HLS client — zero npm runtime dependencies.
+Self-hosted **Node.js** **HLS stream resolver** and **m3u8 proxy** for live FCTV33 sports. Open a local web console, browse live matches by sport, resolve a game to a tokenized CDN playlist through a small **REST API**, and play instantly in the browser — or copy Direct, Proxied, **VLC**, and **mpv** links from the same response.
 
-[![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org/)
-[![License](https://img.shields.io/badge/license-MIT-blue)](#disclaimer)
-[![Dependencies](https://img.shields.io/badge/runtime%20deps-0-success)](#stack)
+The server talks to the upstream data API with signed protobuf requests, decodes ROT47 stream payloads, builds an AES-256-CBC session token URL, then relays HLS manifests and MPEG-TS segments with the player **Referer** headers the CDN expects. There are no npm runtime dependencies: TypeScript compiles to plain Node, and playback uses remote [hls.js](https://github.com/video-dev/hls.js).
 
-## Table of contents
+## Table of Contents
 
-- [Quick start](#quick-start)
-- [What problem does this solve?](#what-problem-does-this-solve)
+- [Quick Start](#quick-start)
+- [Why This Exists](#why-this-exists)
 - [Features](#features)
-- [Use cases](#use-cases)
-- [How does stream resolution work?](#how-does-stream-resolution-work)
-- [How does HLS playback work?](#how-does-hls-playback-work)
-- [REST API reference](#rest-api-reference)
-- [Stack](#stack)
-- [Source layout](#source-layout)
-- [FAQ](#faq)
+- [How Resolution Works](#how-resolution-works)
+- [Architecture](#architecture)
+- [Web UI](#web-ui)
+- [REST API](#rest-api)
+  - [Overview](#overview)
+  - [List Live Matches](#list-live-matches)
+  - [Resolve a Match](#resolve-a-match)
+  - [Proxy HLS](#proxy-hls)
+- [Playback](#playback)
+  - [Browser Player](#browser-player)
+  - [Proxied Playlist](#proxied-playlist)
+  - [Direct CDN with Referer](#direct-cdn-with-referer)
+  - [VLC and mpv](#vlc-and-mpv)
+- [Sport Types](#sport-types)
+- [Stack and Scripts](#stack-and-scripts)
+- [Configuration](#configuration)
+- [Source Layout](#source-layout)
+- [Common Issues](#common-issues)
 - [Disclaimer](#disclaimer)
 
-## Quick start
+## Quick Start
 
-Requires Node.js 18+ (native `fetch` and ES modules).
+Requires **Node.js 20+** (native `fetch` and ES modules).
 
 ```bash
 git clone https://github.com/sharoon7171/fctv33-stream-resolver.git
@@ -30,298 +39,327 @@ cd fctv33-stream-resolver
 npm start
 ```
 
-Open `http://localhost:8787`, paste a match stream page URL, and click **Resolve**. The built-in player loads the proxied HLS stream automatically.
+`npm start` compiles TypeScript, frees the listen port if an old process is still bound, and runs `dist/server/main.js`. The terminal prints the base URL:
 
-Resolve via API:
+```text
+http://localhost:3000
+```
+
+Open that address in a browser. Select a sport tab, click a live match, and the player resolves the stream and autoplays. Timing chips show resolve latency and time to first frame.
+
+From the shell:
 
 ```bash
-curl "http://localhost:8787/api/resolve-link?url=https://example.com/basketball/lakers-vs-celtics-2187976/live.html"
+# Football live list
+curl -s "http://localhost:3000/api/live?sportType=1" | jq .
+
+# Resolve one match (replace matchId with a value from the list)
+curl -s "http://localhost:3000/api/resolve?matchId=4331876&sportType=1" | jq .
 ```
 
-```json
-{
-  "name": "Lakers vs Celtics",
-  "streamUrl": "https://cdn.example.com/token-…/index.m3u8",
-  "referer": "https://player.example.com/",
-  "playableUrl": "http://localhost:8787/api/hls?url=…&referer=…"
-}
+Override the port when needed:
+
+```bash
+PORT=8080 npm start
 ```
 
-Use `playableUrl` for any HLS client that cannot set CDN headers, or open `streamUrl` in VLC/mpv with the returned `referer`. Set `PORT` to override the default `8787`.
+## Why This Exists
 
-## What problem does this solve?
+Live FCTV33 playback is not a single public `.m3u8` link on the page. The site bootstraps a data API host, signs protobuf calls, returns an obfuscated stream URL, and expects the iframe player origin as **Referer** / **Origin** on CDN playlist and segment requests. Browsers cannot set those headers on cross-origin media fetches, so a bare CDN URL often fails with **403** inside `<video>` or hls.js.
 
-A live sports **match page URL is not the stream**. The page is a shell — layout, metadata, and links to a hidden data API. The actual **m3u8 playlist URL** is obfuscated, session-bound, and only accessible with the correct `Referer` and `Origin` headers from the iframe player domain.
+This project turns that chain into three local endpoints:
 
-This project reverse-engineers that chain end to end:
+1. **Live list** — matches that currently have streams, filtered by sport.
+2. **Resolve** — match id → tokenized `streamUrl`, player `referer`, and a localhost `playableUrl`.
+3. **HLS proxy** — fetches upstream with the correct headers and rewrites every playlist URI so segments keep flowing through the same proxy.
 
-1. Scrapes runtime config from match page HTML (API host, site digit, player referer).
-2. Calls the upstream data API with signed protobuf requests.
-3. Decodes ROT47 obfuscation and builds an AES-256-CBC tokenized m3u8 URL.
-4. Proxies all HLS traffic through `/api/hls` so playback works without manual header injection.
-
-Nothing is hardcoded per site — API hosts, player referers, and request signatures are discovered at runtime from page HTML and upstream responses.
+The result is a self-hosted stream resolver you can drive from the UI or from scripts, without pasting match page URLs or manually injecting headers.
 
 ## Features
 
-| Capability | Detail |
+- Live match rail with sport filters (Football, Basketball, Tennis, Cricket, and more)
+- One-click resolve into a playable HLS session with on-screen timing
+- Built-in **hls.js** player with autoplay after manifest parse
+- Copyable **Direct** CDN URL, **Proxied** localhost URL, and ready-made **VLC** / **mpv** command lines
+- Signed upstream access: MD5 request-hash prefix, body signature keys, protobuf envelopes
+- Stream URL construction with ROT47 decode and AES-256-CBC session token wrapping
+- Minimal **m3u8** proxy: header injection, playlist rewrite, MPEG-TS passthrough, open CORS
+- Pure TypeScript sources (`src/` → `dist/`), zero runtime npm packages
+- Equal-height match list and player stage on desktop; list scrolls inside the rail
+
+## How Resolution Works
+
+End-to-end path for a single match (same order as `src/handlers/match.ts` and `src/api/client.ts`):
+
+1. **Entry bootstrap** — `GET https://www.fctv33.com/` HTML is scanned for the site digit (for example `foth`) and the `apis-data*` host. Results are cached in process memory.
+2. **Player referer** — site params (`/api/common/params`, ROT47 JSON) expose iframe player domains; the first domain becomes the CDN referer. A digit-keyed fallback list is used if needed.
+3. **Geo** — `/api/user/info` protobuf yields optional country and continent for stream detail.
+4. **Signatures** — `/api/common/bs` returns body-signing material for codes `0x64`–`0x69`. Live list uses `0x64`; match detail uses `0x66`.
+5. **Live or detail** — signed `GET` under `/sfver{md5-prefix}{suffix}/api/match/…` with ordered query params (`matchId`, `sportType`, `language`, `stream`).
+6. **Stream detail** — `/api/stream/detail` returns an obfuscated URL plus the `rb-session` response header.
+7. **Token URL** — ROT47 decode, strip the leading marker, AES-encrypt the session, and assemble `https://…/token-…/….m3u8`.
+8. **Playable link** — `{origin}/api/hls?url=…&referer=…` so the browser never talks to the CDN directly.
+
+## Architecture
+
+```text
+┌─────────────────┐     ┌──────────────────┐     ┌─────────────────────┐
+│  Web UI / curl  │────▶│  Local HTTP      │────▶│  FCTV33 entry +     │
+│  hls.js player  │◀────│  :3000           │◀────│  apis-data API      │
+└─────────────────┘     │                  │     └─────────────────────┘
+                        │  /api/live       │                │
+                        │  /api/resolve    │                ▼
+                        │  /api/hls  ──────┼──────▶  CDN m3u8 + .ts
+                        └──────────────────┘         (with player referer)
+```
+
+| Layer | Responsibility |
 | --- | --- |
-| Match page parsing | Extracts `matchId`, `sportType`, site digit, and data API host from any supported FCTV33 match URL |
-| Signed API chain | MD5-prefixed path signing, protobuf envelope parsing, geo-aware stream detail |
-| Token URL builder | ROT47 decode → AES-256-CBC session token → tokenized CDN m3u8 path |
-| HLS proxy | Rewrites m3u8 manifests, strips CDN `#EXT-X-START`, decodes `_ctump` / `_ctuph` segment URLs, unwraps PNG-wrapped MPEG-TS |
-| Referer injection | Applies iframe player `Referer` and `Origin` on every upstream CDN fetch |
-| Browser UI | Built-in web player with hls.js, resolve timing, and exports for Direct, Proxied, VLC, and mpv |
-| Marketing → play site | Redirects marketing hosts (e.g. `fctv33.com`) to the real play domain from `g_player_domains` before resolving |
-| Zero runtime deps | Node.js built-ins only — `node:http`, `node:crypto`, native `fetch` |
+| `server/` | Node `http` server, router, static client assets |
+| `handlers/` | JSON handlers for live list and match resolve |
+| `api/` | Bootstrap, signed client, protobuf field parsers |
+| `crypto/` | Param sort + MD5 prefix, ROT47, AES stream token |
+| `proxy/` | Upstream fetch, playlist rewrite, segment relay |
+| `client/` | Live sports UI, player, export fields |
+| `config/` | Entry origin, path constants, signature codes, user-agent |
 
-Supported sports include football, basketball, tennis, baseball, cricket, hockey, rugby, motorsport, and more. See [`src/config/site.js`](src/config/site.js) for the full sport slug map.
+Request flow at the router:
 
-## Use cases
-
-| Scenario | Description |
+| Path | Handler |
 | --- | --- |
-| Web UI playback | Submit a match page URL at `/`; the resolver returns stream metadata and starts live playback through the built-in player. |
-| External playback | Copy **Proxied** (`playableUrl`) into any HLS client, or copy the **VLC** / **mpv** CLI lines (direct `streamUrl` + iframe `referer`) — see [The proxied link](#the-proxied-link-is-a-direct-stream-url). |
-| API integration | Call `GET /api/resolve-link?url=` from scripts, services, or automation. Feed `playableUrl` to consumers that cannot set CDN headers, or use `streamUrl` + `referer` when the client can. |
-| Custom front-end | Replace the default UI while keeping the two-endpoint contract. See [`public/app.js`](public/app.js) for hls.js wiring against `playableUrl`. |
-| Deep-link resolve | Pass `?url=` on the web UI root to resolve a match page on load without manual input. |
-| Upstream protocol study | Trace the full resolve path in source: HTML scrape, signed API bootstrap, protobuf parsing, AES token URL construction, and HLS manifest rewrite. |
+| `GET /api/live` | `handlers/live.ts` |
+| `GET /api/resolve` | `handlers/match.ts` |
+| `GET /api/hls` | `proxy/hls.ts` |
+| everything else | `server/static.ts` (UI under `dist/client/`) |
 
-Deep-link example:
+## Web UI
 
-```
-GET http://localhost:8787/?url=https://example.com/football/match-1234567/live.html
-```
+The homepage is a compact live console — not a page-URL paste form.
 
-## How does stream resolution work?
+### Layout
 
-`GET /api/resolve-link?url=` is handled by [`src/resolve/stream.js`](src/resolve/stream.js). The handler validates the URL, walks the upstream chain, and returns a stream name, raw m3u8 URL, and proxied playback URL.
+- **Top bar** — FCTV33 branding, live count chip, Refresh
+- **Sport tabs** — horizontal filter (Football is default)
+- **Match rail** — scrollable list of live fixtures with match ids
+- **Stage** — title, resolve / first-frame timings, 16:9 player, export fields
 
-```mermaid
-sequenceDiagram
-  participant C as API consumer
-  participant R as /api/resolve-link
-  participant P as match-page-url
-  participant A as UpstreamApiClient
-  participant Page as Match page HTML
-  participant API as Data API
-  participant T as stream-token
+On wide screens the rail height matches the player + exports block so the video stays visible while you scroll matches. On smaller screens the player stacks first and the list uses a capped height with its own scroll.
 
-  C->>R: GET ?url=stream page
-  R->>P: validateStreamPageUrl
-  P->>Page: fetch HTML (page Referer / Origin)
-  P->>P: digit, apis-data host from HTML
-  P->>API: /api/common/params → g_player_domains + iframe player domain
-  P->>Page: if marketing host, re-fetch play-site HTML
-  R->>A: geo, match detail, stream detail
-  A->>API: signed + protobuf requests
-  API-->>A: obfuscated url, rb-session
-  A->>T: buildSignedStreamUrl
-  R-->>C: name, streamUrl, referer, playableUrl
-```
+### Flow
 
-### What URL format is accepted?
+1. The UI calls `/api/live?sportType=…` and fills the rail.
+2. A click calls `/api/resolve?matchId=…&sportType=…`.
+3. Timing starts immediately; resolve time freezes when JSON returns; first-frame time freezes when `<video>` fires `playing`.
+4. The player attaches hls.js to `playableUrl` (or native HLS on Safari when supported).
+5. Export inputs fill with Direct, Proxied, VLC, and mpv strings; each has a Copy button.
 
-Input must be an individual match page:
+If the live list or resolve fails, an error banner appears above the workspace and the status chip switches to a failed state.
 
-```
-https://{any-host}/{optional-locale}/{sport}/{slug}-{matchId}.html
-```
+## REST API
 
-[`src/upstream/match-page-url.js`](src/upstream/match-page-url.js) maps the sport slug to `sportType` and reads `matchId` from the slug suffix. An optional locale prefix (`en`, `zh`, `th`, etc.) is skipped. Query param `mdata` can supply base64-encoded `matchId_sportType` instead.
+Base URL defaults to `http://localhost:3000`. All resolve and live responses are JSON. The HLS proxy returns playlist text or binary segments.
 
-The page is fetched with `Referer` and `Origin` set to the stream page origin. From the HTML, two values are extracted: the data API host (`apis-data\d+\.[a-z0-9.-]+`) and the stream site digit (`layout:"livestream-{digit}"`).
+### Overview
 
-Marketing or listing hosts (for example `fctv33.com`) often use a digit without `iframePlayerDomains`. In that case [`parseMatchPageUrl`](src/upstream/match-page-url.js) reads `g_player_domains[digit]` from `/api/common/params`, builds the play-site URL (path `-match-{id}` → `-{id}`, strip trailing `-{mm}-{yyyy}` before `.html`, set `icg` / `ilang`), and re-fetches that page so the digit and iframe referer come from the real player host.
+| Method | Path | Query | Success body |
+| --- | --- | --- | --- |
+| `GET` | `/api/live` | `sportType` | `{ sportType, matches }` |
+| `GET` | `/api/resolve` | `matchId`, `sportType` | stream object (below) |
+| `GET` | `/api/hls` | `url`, `referer` | m3u8 text or MPEG-TS bytes |
 
-### What referer contexts are used?
+Unknown `/api/*` paths return `{ "error": "not found" }` with status `404`. Upstream failures on live/resolve use status `502` with an `error` string. Validation errors use `400`.
 
-Two referer values are used downstream:
+### List Live Matches
 
-| Context | Source | Used for |
-| --- | --- | --- |
-| Page | Stream / play page URL origin | Match page fetch, geo, signature bootstrap, match detail |
-| Player | `iframePlayerDomains[digit]` from `common:web:client` | Stream detail, CDN access via `/api/hls` |
-
-Player domain comes from `GET {apiBase}/api/common/params` (ROT47-encoded JSON), after any marketing → play-site hop. If no iframe domain exists for the digit on the play page, resolution fails.
-
-### What is the upstream API chain?
-
-[`src/upstream/api-client.js`](src/upstream/api-client.js) calls the data API in order:
-
-| Step | Endpoint | Output |
-| --- | --- | --- |
-| Geo | `/api/user/info` | `country`, `continent` |
-| Signatures | `/api/common/bs` | Body-signing keys (cached per match) |
-| Match | `/sfver{md5prefix}{suffix}/api/match/detail` | Streams with `streamId`, `siteType`, `name` |
-| Stream | `/api/stream/detail` | Obfuscated `url`; `rb-session` response header |
-
-Match detail is signed: params sorted per `REQUEST_PARAM_ORDER`, six-character MD5 path prefix ([`src/crypto/request-hash.js`](src/crypto/request-hash.js)), suffix from bootstrap key `0x66`. Protobuf bodies are parsed in [`src/upstream/protobuf.js`](src/upstream/protobuf.js). The handler picks the first stream with a `streamId`.
-
-### How is the tokenized m3u8 URL built?
-
-[`src/crypto/stream-token.js`](src/crypto/stream-token.js) builds the CDN m3u8:
-
-1. ROT47-decode the obfuscated URL (drop first eight characters).
-2. AES-256-CBC encrypt the `rb-session` token.
-3. Insert `token-{encryptedBase64}a` into the path.
-
-The response contains `streamUrl` (raw upstream m3u8), `referer` (iframe player origin), and `playableUrl` (`/api/hls` with that referer).
-
-## How does HLS playback work?
-
-CDN m3u8 and segment requests require the iframe player as `Referer` and `Origin`. A client cannot fetch them directly from the raw `streamUrl`. `playableUrl` routes all HLS traffic through [`src/hls/proxy.js`](src/hls/proxy.js), which applies the player referer on every upstream fetch and returns a plain HTTP HLS endpoint.
-
-### The proxied link is a direct stream URL
-
-`playableUrl` (shown as **Proxied** in the web UI) is a ready-to-play stream link — not a page URL and not an embed. Copy it after resolve and paste it into any app that accepts an m3u8 URL. No extra setup per player; the proxy handles referer headers and manifest rewrite upstream.
-
-**VLC** and **mpv** exports use the raw `streamUrl` with the real iframe `referer` instead of the proxy:
+Returns fixtures that currently advertise streams for the given sport.
 
 ```bash
-vlc --http-referrer 'https://player.example.com/' 'https://cdn…/index.m3u8'
-mpv --referrer='https://player.example.com/' 'https://cdn…/index.m3u8'
+curl -s "http://localhost:3000/api/live?sportType=1"
 ```
-
-Works with VLC, Stremio, mpv, Kodi, PotPlayer, IINA, ffplay, IPTV apps (TiviMate, IPTV Smarters), OBS, Safari, mobile players, Smart TV apps, and any other HLS client that opens network stream URLs.
-
-For `playableUrl`, the resolver must be reachable from the device running the player: use `localhost` on the same host, or substitute the host's LAN IP when playing from another machine on the network. `/api/hls` responses include CORS headers for cross-origin browser access.
-
-```mermaid
-flowchart TB
-  subgraph consumer ["HLS client"]
-    HLS["Any m3u8 consumer"]
-  end
-
-  subgraph proxy ["src/hls/proxy.js"]
-    F["fetch upstream"]
-    D["decode _ctump / _ctuph"]
-    W["rewrite m3u8 lines → /api/hls"]
-    U["unwrap PNG → MPEG-TS"]
-    F --> D
-    D --> W
-    D --> U
-  end
-
-  CDN["HLS CDN"]
-  HLS -->|playableUrl| proxy
-  proxy -->|Referer + Origin = playerReferer| CDN
-  W --> HLS
-  U --> HLS
-```
-
-### What does the HLS proxy do on each request?
-
-Each `GET /api/hls?url=&referer=` request:
-
-1. Fetches upstream with CDN headers derived from `referer`.
-2. Decodes `_ctump` / `_ctuph` segment URLs when present ([`src/crypto/segment-url.js`](src/crypto/segment-url.js)).
-3. Rewrites `#EXTM3U` media lines to `/api/hls` so the consumer never leaves the resolver origin, and strips `#EXT-X-START`. The CDN’s positive `TIME-OFFSET=4` would otherwise force hls.js to start ~41s back on a 45s window.
-4. Unwraps PNG-contained MPEG-TS and returns `video/mp2t` when the sync byte is `0x47`.
-
-Upstream HTML or non-2xx responses return `502`.
-
-The reference client ([`public/app.js`](public/app.js)) consumes `playableUrl` via hls.js or native HLS and does not set CDN headers. Live edge delay is controlled in the player: `liveSyncDurationCount: 3` (three 3s segments ≈ 9s behind live), `startPosition: -1`, and playback starts only after that much buffer is loaded at `liveSyncPosition`.
-
-## REST API reference
-
-| Route | Params | Response |
-| --- | --- | --- |
-| `GET /api/resolve-link` | `url` — match stream page URL | `{ name, streamUrl, referer, playableUrl }` or `{ error }` |
-| `GET /api/hls` | `url` — upstream m3u8 or segment URL; `referer` — iframe player referer | Rewritten m3u8 text or MPEG-TS bytes |
-
-### `GET /api/resolve-link`
-
-Resolves a match stream page URL to a playable HLS link.
-
-| Param | Required | Description |
-| --- | --- | --- |
-| `url` | yes | Full match page URL from the browser address bar |
-
-**Success (200):**
 
 ```json
 {
-  "name": "Team A vs Team B",
-  "streamUrl": "https://cdn…/token-…/index.m3u8",
-  "referer": "https://player…/",
-  "playableUrl": "http://localhost:8787/api/hls?url=…&referer=…"
+  "sportType": 1,
+  "matches": [
+    {
+      "matchId": 4331876,
+      "sportType": 1,
+      "name": "Team A vs Team B"
+    }
+  ]
 }
 ```
 
-**Errors:** `400` for invalid or missing URL; `502` when upstream resolution fails.
-
-### `GET /api/hls`
-
-HLS proxy endpoint for m3u8 manifests and MPEG-TS segments.
-
-| Param | Required | Description |
+| Query | Required | Notes |
 | --- | --- | --- |
-| `url` | yes | Upstream m3u8 or segment URL |
-| `referer` | yes | Stream iframe referer for CDN access |
+| `sportType` | no | Defaults to `1` (Football). Must be a finite number. |
 
-Returns rewritten m3u8 (`application/vnd.apple.mpegurl`) or MPEG-TS (`video/mp2t`). Includes CORS headers for browser playback.
+Empty `matches` means nothing live for that sport right now — not necessarily an API failure.
 
-## Stack
+### Resolve a Match
 
-| Layer | Component | Role |
-| --- | --- | --- |
-| Runtime | Node.js (ES modules) | Resolve pipeline and HTTP server |
-| HTTP | `node:http` | TCP listener; requests adapted to the Web `Request` API |
-| Networking | native `fetch` | Match page, data API, and CDN fetches |
-| Cryptography | `node:crypto` | MD5 request-hash prefix; AES-256-CBC stream token |
-| Serialization | Hand-rolled protobuf | API envelope and field parsing |
-| Playback | hls.js (CDN) | MSE HLS demux in the reference client |
+Runs the full upstream chain and returns both the raw CDN playlist and a localhost proxied URL.
 
-## Source layout
-
+```bash
+curl -s "http://localhost:3000/api/resolve?matchId=4331876&sportType=1"
 ```
+
+```json
+{
+  "name": "Stream label",
+  "matchId": "4331876",
+  "sportType": 1,
+  "streamUrl": "https://cdn.example/token-…/index.m3u8",
+  "referer": "https://player.example/",
+  "playableUrl": "http://localhost:3000/api/hls?url=…&referer=…"
+}
+```
+
+| Field | Description |
+| --- | --- |
+| `name` | Label from the selected stream item |
+| `matchId` | Echo of the request (numeric string) |
+| `sportType` | Echo of the request |
+| `streamUrl` | Tokenized CDN **m3u8**; needs the player referer on CDN requests |
+| `referer` | Iframe player origin used as `Referer` / `Origin` |
+| `playableUrl` | Local proxy URL safe for browser players and clients that cannot set headers |
+
+| Query | Required | Notes |
+| --- | --- | --- |
+| `matchId` | yes | Digits only |
+| `sportType` | yes | Finite number matching the live list entry |
+
+### Proxy HLS
+
+Fetches an upstream playlist or segment with the player referer, then either rewrites the manifest or returns segment bytes.
+
+```bash
+curl -s "http://localhost:3000/api/hls?url=<encoded-m3u8-or-ts>&referer=<player-origin>/"
+```
+
+| Query | Required | Notes |
+| --- | --- | --- |
+| `url` | yes | Absolute upstream playlist or `.ts` URL |
+| `referer` | yes | Same player origin returned by resolve (include trailing `/` as returned) |
+
+Behavior:
+
+- Detects playlists via `#EXTM3U` in the body or `.m3u8` in the URL.
+- Rewrites non-comment URI lines to absolute URLs that point back at `/api/hls` with the same referer.
+- Serves playlists as `application/vnd.apple.mpegurl` and segments as `video/mp2t`.
+- Sets `Cache-Control: no-store` and `Access-Control-Allow-Origin: *`.
+- On upstream failure returns plain-text status `502`.
+
+## Playback
+
+### Browser Player
+
+The UI loads `playableUrl` with hls.js when Media Source Extensions are available. On Apple platforms that support native HLS, the video element can take the proxied URL directly. Autoplay starts after the manifest is parsed.
+
+### Proxied Playlist
+
+Use `playableUrl` whenever the client cannot attach custom HTTP headers (most browser players, many embed setups, simple HLS demos). All playlist and segment traffic stays on localhost and inherits the referer from the proxy.
+
+### Direct CDN with Referer
+
+`streamUrl` is the real tokenized playlist on the CDN. It works in players that can send headers — for example VLC and mpv — when paired with the returned `referer`. Opening `streamUrl` alone in a normal browser tab usually fails.
+
+### VLC and mpv
+
+After a successful resolve, the UI fills:
+
+```bash
+vlc --http-referrer '<referer>' '<streamUrl>'
+mpv --referrer='<referer>' '<streamUrl>'
+```
+
+Copy either line and run it on a machine with VLC or mpv installed. Prefer `playableUrl` if you want a single URL without referer flags.
+
+## Sport Types
+
+Values match the upstream `sportType` field and the UI tabs.
+
+| `sportType` | Label |
+| ---: | --- |
+| 1 | Football |
+| 2 | Basketball |
+| 3 | Tennis |
+| 4 | Baseball |
+| 6 | Cricket |
+| 7 | Motorsport |
+| 8 | Rugby |
+| 9 | Am. Football |
+| 11 | Hockey |
+| 90 | Others |
+
+## Stack and Scripts
+
+| Piece | Detail |
+| --- | --- |
+| Runtime | Node.js ≥ 20 |
+| Language | TypeScript (strict), ESM (`"type": "module"`) |
+| Server build | `tsc -p tsconfig.json` → `dist/` |
+| Client build | `tsc -p tsconfig.client.json` → `dist/client/` plus copied HTML/CSS |
+| Runtime deps | None |
+| Dev deps | `typescript`, `@types/node` |
+| Player | hls.js from jsDelivr in `index.html` |
+
+```bash
+npm start        # build, kill stale listeners on PORT, run the server
+npm run build    # compile server + client assets only
+npm run typecheck
+```
+
+Source maps are disabled. The listen URL is the only startup log line.
+
+## Configuration
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `PORT` | `3000` | HTTP listen port for the UI and API |
+
+Entry origin, API paths, signature codes, and user-agent live in `src/config/site.ts`. Stream AES key material lives in `src/crypto/stream-token.ts` (derived from the public client bundle constants).
+
+## Source Layout
+
+```text
 src/
-  main.js                 HTTP server entry
-  http/router.js          Route dispatch
-  resolve/stream.js       /api/resolve-link handler
-  hls/proxy.js            /api/hls proxy and manifest rewrite
-  upstream/api-client.js  Signed data API client
-  upstream/match-page-url.js  URL validation and page scrape
-  upstream/protobuf.js    Protobuf envelope parsing
-  crypto/rot47.js         ROT47 decode
-  crypto/request-hash.js  MD5 path prefix signing
-  crypto/stream-token.js  AES token URL builder
-  crypto/segment-url.js   _ctump / _ctuph segment decode
-  config/site.js          Sport slugs, locale codes, API constants
-public/
-  index.html              Web UI
-  style.css               UI styles
-  app.js                  hls.js reference player
+  api/
+    bootstrap.ts    # entry HTML → digit + apis-data base URL
+    client.ts       # signed live/detail/stream client
+    protobuf.ts     # envelope, live list, match/stream detail parsers
+  crypto/
+    request-hash.ts # param order + MD5 prefix for /sfver…
+    rot47.ts        # ROT47 helper
+    stream-token.ts # AES tokenized CDN URL
+  handlers/
+    live.ts         # GET /api/live
+    match.ts        # GET /api/resolve
+  proxy/
+    hls.ts          # GET /api/hls
+  server/
+    main.ts         # http.createServer
+    router.ts       # path dispatch
+    static.ts       # dist/client assets
+  client/
+    app.ts          # live UI + hls.js wiring
+    index.html
+    styles.css
+  config/
+    site.ts         # origins, paths, signatures, UA
 ```
 
-## FAQ
+## Common Issues
 
-<details>
-<summary>What is the difference between streamUrl, referer, and playableUrl?</summary>
-
-`streamUrl` is the raw upstream tokenized m3u8 on the CDN — it needs the iframe `referer`. `referer` is that player origin. `playableUrl` is the proxied stream URL with headers handled by `/api/hls`. Use `playableUrl` for clients that cannot set referer headers; use `streamUrl` + `referer` (or the UI’s VLC/mpv CLI lines) when the client can.
-</details>
-
-<details>
-<summary>Does this work when the FCTV33 domain changes?</summary>
-
-Yes. API hosts and player referers are scraped from match page HTML at runtime — no hardcoded domain list is required. Sport slugs and locale codes are configured in [`src/config/site.js`](src/config/site.js).
-</details>
-
-<details>
-<summary>Why zero npm dependencies?</summary>
-
-The entire resolve and proxy pipeline uses Node.js built-ins. hls.js is loaded from CDN in the browser UI only — it is not a server runtime dependency.
-</details>
-
-<details>
-<summary>What sports are supported?</summary>
-
-Any sport with a slug in `SPORT_SLUGS`: football, basketball, tennis, baseball, cricket, motorsport, rugby, american-football, aussie-rules, hockey, badminton, volleyball, fighting, cycling, handball, and others.
-</details>
+| Symptom | Likely cause |
+| --- | --- |
+| Live list empty | No streams for that sport at the moment; try another tab or Refresh |
+| Resolve `502` | Upstream signature, geo, or stream detail failure — check the JSON `error` string |
+| Browser plays black / errors | Prefer `playableUrl`; Direct CDN URLs need referer the browser cannot set |
+| VLC/mpv fail on Direct | Confirm the copied `--http-referrer` / `--referrer` matches resolve `referer` |
+| Port already in use | `npm start` tries to free `PORT`; otherwise set `PORT=8080` |
+| Bootstrap errors | Entry page HTML shape changed; bootstrap regex in `api/bootstrap.ts` may need an update |
 
 ## Disclaimer
 
-This project documents and demonstrates third-party streaming mechanics for educational and research purposes only. It is not affiliated with any broadcaster or rights holder. You are responsible for complying with applicable law and terms of service where you use it. Do not use this tool to circumvent access controls or distribute copyrighted content without authorization.
+This project is for personal learning and local experimentation with HLS resolution, signed API clients, and referer-aware m3u8 proxying. Respect the terms of service and copyright of any upstream content provider. You are responsible for how you use the software.
