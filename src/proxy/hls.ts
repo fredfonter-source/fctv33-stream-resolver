@@ -43,7 +43,8 @@ export async function proxyHls(request: Request): Promise<Response> {
     }
     const head = body.subarray(0, Math.min(body.length, 256)).toString("utf8");
     if (head.includes("#EXTM3U") || targetUrl.includes(".m3u8")) {
-      return new Response(rewriteManifest(body.toString("utf8"), targetUrl, playerReferer, url.origin), {
+      const origin = url.origin.replace(/^http:/, "https:");
+      return new Response(rewriteManifest(body.toString("utf8"), targetUrl, playerReferer, origin), {
         status: 200,
         headers: { ...CORS, "Content-Type": "application/vnd.apple.mpegurl" },
       });
