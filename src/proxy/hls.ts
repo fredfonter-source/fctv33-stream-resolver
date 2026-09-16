@@ -49,7 +49,7 @@ export async function proxyHls(request: Request): Promise<Response> {
       const origin = url.origin.replace(/^http:/, "https:");
       return new Response(rewriteManifest(body.toString("utf8"), targetUrl, playerReferer, origin), {
         status: 200,
-        headers: { ...CORS, "Content-Type": "application/vnd.apple.mpegurl" },
+        headers: { ...CORS, "Content-Type": "application/x-mpegurl" },
       });
     }
     return new Response(new Uint8Array(body), {
