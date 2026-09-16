@@ -1,4 +1,5 @@
 export const ENTRY_ORIGIN = "https://www.fctv33.com";
+DATA_API_BASE_URL = "https://apis-data10.tcllu137fien.ru"
 
 export const PATH = {
   live: "/api/match/live",
