@@ -1,4 +1,4 @@
-import { ENTRY_ORIGIN, USER_AGENT } from "../config/site.js";
+import { DATA_API_BASE_URL, ENTRY_ORIGIN, USER_AGENT } from "../config/site.js";
 
 type SiteBootstrap = {
   digit: string;
