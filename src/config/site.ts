@@ -2,6 +2,7 @@ export const ENTRY_ORIGIN = "https://www.fctv33.com";
 
 export const PATH = {
   live: "/api/match/live",
+  schedule: "/api/match/schedule",
   matchDetail: "/api/match/detail",
   streamDetail: "/api/stream/detail",
   params: "/api/common/params",
@@ -26,13 +27,3 @@ export const REQUEST_PARAM_ORDER = [
 export const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 export const DATA_API_BASE_URL = "https://apis-data10.tcllu137fien.ru";
-
-export const PATH = {
-  live: "/api/match/live",
-  schedule: "/api/match/schedule",  // ADD THIS
-  matchDetail: "/api/match/detail",
-  streamDetail: "/api/stream/detail",
-  params: "/api/common/params",
-  signatures: "/api/common/bs",
-  userInfo: "/api/user/info",
-} as const;
