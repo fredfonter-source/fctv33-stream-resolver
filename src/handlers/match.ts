@@ -35,6 +35,7 @@ export async function resolveMatch(
     });
     if (!detail.stream.url) throw new Error("stream detail missing url");
     const streamUrl = buildSignedStreamUrl(detail.stream.url, detail.sessionToken);
+    const secureOrigin = origin.replace(/^http:/, "https:");
     return Response.json({
       name: stream.name ?? "",
       matchId,
