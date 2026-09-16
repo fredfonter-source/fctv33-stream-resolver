@@ -107,6 +107,12 @@ export class ApiClient {
     this.signatureCacheKey = cacheKey;
   }
 
+  async fetchScheduleMatches(sportType: number): Promise<LiveMatch[]> {
+  await this.loadSignatures(0, sportType);
+  const params: RequestParams = { language: 0, sportType, stream: true };
+  return parseLiveMatchList(Buffer.from(await this.signedGet(PATH.schedule, params, SIGNATURE.live)));
+}
+
   async fetchLiveMatches(sportType: number): Promise<LiveMatch[]> {
     await this.loadSignatures(0, sportType);
     const params: RequestParams = { language: 0, sportType, stream: true };
