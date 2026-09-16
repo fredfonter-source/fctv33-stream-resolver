@@ -42,7 +42,7 @@ export async function resolveMatch(
       sportType,
       streamUrl,
       referer: playerReferer,
-      playableUrl: buildProxyUrl(streamUrl, playerReferer, origin),
+       playableUrl: buildProxyUrl(streamUrl, playerReferer, secureOrigin),
     });
   } catch (error) {
     return Response.json(
