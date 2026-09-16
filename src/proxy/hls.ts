@@ -15,9 +15,12 @@ function rewriteManifest(body: string, targetUrl: string, playerReferer: string,
     .split("\n")
     .map((line) => {
       const trimmed = line.trim();
+      // Strip #EXT-X-START — ExoPlayer Android chokes on this tag for live streams
+      if (trimmed.startsWith("#EXT-X-START")) return "";
       if (!trimmed || trimmed.startsWith("#")) return line;
       return buildProxyUrl(new URL(trimmed, base).href, playerReferer, origin);
     })
+    .filter((line) => line !== "")
     .join("\n");
 }
 
