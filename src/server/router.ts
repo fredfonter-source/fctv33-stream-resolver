@@ -1,6 +1,7 @@
 import { proxyHls } from "../proxy/hls.js";
 import { listLiveMatches } from "../handlers/live.js";
 import { resolveMatch } from "../handlers/match.js";
+import { listScheduleMatches } from "../handlers/schedule.js";
 import { serveClient } from "./static.js";
 
 export async function handleRequest(request: Request): Promise<Response> {
@@ -10,6 +11,7 @@ export async function handleRequest(request: Request): Promise<Response> {
   if (url.pathname === "/api/resolve") {
     return resolveMatch(url.searchParams.get("matchId"), url.searchParams.get("sportType"), url.origin);
   }
+  if (url.pathname === "/api/schedule") return listScheduleMatches(url.searchParams.get("sportType"));
   if (url.pathname.startsWith("/api/")) return Response.json({ error: "not found" }, { status: 404 });
   return serveClient(url.pathname);
 }
