@@ -12,7 +12,7 @@ export const PATH = {
 
 export const SIGNATURE = {
   live: 0x64,
-  schedule: 0x67,
+  schedule: 0x68,
   detail: 0x66,
 } as const;
 
