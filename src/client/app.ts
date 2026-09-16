@@ -152,7 +152,7 @@ const stopPlayback = () => {
   el.video.load();
 };
 
-const startPlayback = (url: string, timing: NonNullable<typeof state.timer>) => {
+const startPlayback = (url: string, timing: NonNullable<typeof state.timer>, referer?: string) => {
   stopPlayback();
   const gen = state.gen;
   const current = () => gen === state.gen;
