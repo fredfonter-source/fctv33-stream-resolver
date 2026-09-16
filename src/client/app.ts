@@ -297,8 +297,8 @@ const playMatch = async (match: LiveMatch) => {
     bindExports(result);
     setPlaying();
     timing.markResolved();
-    if (!result.streamUrl) throw new Error("missing stream url");
-    await startPlayback(result.streamUrl, timing, result.referer);
+    if (!result.playableUrl) throw new Error("missing playable url");
+    await startPlayback(result.playableUrl, timing);
   } catch (error) {
     stopTiming();
     el.timing.hidden = true;
