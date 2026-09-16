@@ -175,7 +175,14 @@ const startPlayback = (url: string, timing: NonNullable<typeof state.timer>, ref
     el.video.addEventListener("error", onError);
 
     if (Hls.isSupported()) {
-      state.hls = new Hls({ enableWorker: true, lowLatencyMode: true, backBufferLength: 30 });
+      state.hls = new Hls({
+      enableWorker: true,
+    lowLatencyMode: true,
+    backBufferLength: 30,
+    xhrSetup: (xhr: XMLHttpRequest) => {
+    if (referer) xhr.setRequestHeader("Referer", referer);
+  },
+});
       state.hls.on(Hls.Events.ERROR, (_e, data) => {
         if ((data as { fatal?: boolean } | undefined)?.fatal) finish(false, new Error("playback failed"));
       });
